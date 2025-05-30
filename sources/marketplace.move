@@ -8,8 +8,6 @@ module suibiz::marketplace {
     use sui::object::UID;
     use sui::transfer;
 
-    // ========== Data Structures ==========
-
     public struct Product has key, store {
         id: UID,
         product_id: String,
@@ -26,7 +24,6 @@ module suibiz::marketplace {
         products_count: u64
     }
 
-    // One-time witness type
     public struct MARKETPLACE has drop {}
 
     // ========== Events ==========
@@ -45,11 +42,10 @@ module suibiz::marketplace {
         price: u64
     }
 
-    // ========== Constants ==========
+
 
     const MAX_FEE_PERCENTAGE: u64 = 10;
 
-    // ========== Initialization ==========
 
     fun init(
         _witness: MARKETPLACE,
