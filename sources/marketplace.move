@@ -14,7 +14,23 @@ module suibiz::marketplace {
         owner: address,
         price: u64,
         is_listed: bool,
-        collection: String
+        collection: String,
+        name: String,
+        description: String,
+        quantity: u64,
+        image_url: String
+    }
+
+    public struct PurchasedProduct has key, store {
+        id: UID,
+        original_product_id: String,
+        owner: address,
+        purchased_quantity: u64,
+        unit_price: u64,
+        collection: String,
+        name: String,
+        description: String,
+        image_url: String
     }
 
     public struct Marketplace has key {
@@ -26,64 +42,73 @@ module suibiz::marketplace {
 
     public struct MARKETPLACE has drop {}
 
-    // ========== Events ==========
 
     public struct ProductListed has copy, drop {
         product_id: String,
         owner: address,
         price: u64,
-        collection: String
+        collection: String,
+        quantity: u64,
+        name: String,
+        description: String,
+        image_url: String
     }
 
     public struct ProductPurchased has copy, drop {
         product_id: String,
         buyer: address,
         seller: address,
-        price: u64
+        quantity: u64,
+        unit_price: u64,
+        total_price: u64
     }
-
-
 
     const MAX_FEE_PERCENTAGE: u64 = 10;
 
+    public entry fun create_and_init_marketplace(
+    ctx: &mut TxContext
+) {
+    let fee_percentage = 2;
+    let fee_recipient = tx_context::sender(ctx);
+    
+    assert!(fee_percentage <= MAX_FEE_PERCENTAGE, 0);
+    
+    let marketplace = Marketplace {
+        id: object::new(ctx),
+        fee_percentage,
+        fee_recipient,
+        products_count: 0
+    };
 
-    fun init(
-        _witness: MARKETPLACE,
-        ctx: &mut TxContext
-    ) {
-        let fee_percentage = 2;
-        let fee_recipient = tx_context::sender(ctx);
-        
-        assert!(fee_percentage <= MAX_FEE_PERCENTAGE, 0);
-        
-        let marketplace = Marketplace {
-            id: object::new(ctx),
-            fee_percentage,
-            fee_recipient,
-            products_count: 0
-        };
+    transfer::share_object(marketplace);
+}
 
-        transfer::share_object(marketplace);
-    }
-
-    // ========== Core Functions ==========
 
     public entry fun list_product( 
         marketplace: &mut Marketplace,
         product_id: String,
         price: u64,
         collection: String,
+        name: String,
+        description: String,
+        image_url: String,
+        quantity: u64,
         ctx: &mut TxContext
     ) {
         assert!(price > 0, 1);
+        assert!(quantity > 0, 2);
 
         let product = Product {
             id: object::new(ctx),
-            product_id,
+            product_id: copy product_id,
             owner: tx_context::sender(ctx),
             price,
+            name: copy name,
+            description: copy description,
+            image_url: copy image_url,
+            quantity,
             is_listed: true,
-            collection
+            collection: copy collection
         };
 
         marketplace.products_count = marketplace.products_count + 1;
@@ -93,24 +118,32 @@ module suibiz::marketplace {
             product_id,
             owner: tx_context::sender(ctx),
             price,
-            collection
+            collection,
+            quantity,
+            name,
+            description,
+            image_url
         });
     }
 
     public entry fun purchase_product(
         marketplace: &mut Marketplace,
         product: &mut Product,
+        quantity_to_purchase: u64,
         payment: Coin<SUI>,
         ctx: &mut TxContext
     ) {
-        assert!(product.is_listed, 2);
-        assert!(coin::value(&payment) >= product.price, 3);
+        assert!(product.is_listed, 3);
+        assert!(quantity_to_purchase > 0, 4);
+        assert!(product.quantity >= quantity_to_purchase, 5);
+        
+        let total_price = product.price * quantity_to_purchase;
+        assert!(coin::value(&payment) >= total_price, 6);
 
         let buyer = tx_context::sender(ctx);
         let seller = product.owner;
-        let price = product.price;
-        let fee_amount = price * marketplace.fee_percentage / 100;
-        let seller_amount = price - fee_amount;
+        let fee_amount = total_price * marketplace.fee_percentage / 100;
+        let seller_amount = total_price - fee_amount;
 
         // Split payment into seller and fee portions
         let mut payment_balance = coin::into_balance(payment);
@@ -121,27 +154,44 @@ module suibiz::marketplace {
         transfer::public_transfer(seller_coin, seller);
         transfer::public_transfer(fee_coin, marketplace.fee_recipient);
 
-        // Transfer product ownership
-        product.owner = buyer;
-        product.is_listed = false;
+        product.quantity = product.quantity - quantity_to_purchase;
+        
+        let purchased_product = PurchasedProduct {
+            id: object::new(ctx),
+            original_product_id: product.product_id,
+            owner: buyer,
+            purchased_quantity: quantity_to_purchase,
+            unit_price: product.price,
+            collection: product.collection,
+            name: product.name,
+            description: product.description,
+            image_url: product.image_url
+        };
+
+        transfer::transfer(purchased_product, buyer);
 
         event::emit(ProductPurchased {
             product_id: product.product_id,
             buyer,
             seller,
-            price
+            quantity: quantity_to_purchase,
+            unit_price: product.price,
+            total_price
         });
+
+        if (product.quantity == 0) {
+            product.is_listed = false;
+        }
     }
 
-    // ========== Utility Functions ==========
 
     public entry fun update_price(
         product: &mut Product,
         new_price: u64,
         _ctx: &mut TxContext
     ) {
-        assert!(product.is_listed, 4);
-        assert!(new_price > 0, 5);
+        assert!(product.is_listed, 7);
+        assert!(new_price > 0, 8);
         product.price = new_price;
     }
 
@@ -150,5 +200,17 @@ module suibiz::marketplace {
         _ctx: &mut TxContext
     ) {
         product.is_listed = false;
+    }
+
+    public entry fun add_quantity(
+        product: &mut Product,
+        additional_quantity: u64,
+        _ctx: &mut TxContext
+    ) {
+        assert!(additional_quantity > 0, 9);
+        product.quantity = product.quantity + additional_quantity;
+        if (!product.is_listed) {
+            product.is_listed = true;
+        }
     }
 }

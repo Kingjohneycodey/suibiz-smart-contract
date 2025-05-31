@@ -2,6 +2,8 @@
 
 
 
+
+
 sui client call \
   --function init_registry \
   --module user \
