@@ -59,12 +59,12 @@ module suibiz::user {
         event::emit(ProfileIdEvent { id: profile_id });
     }
 
-    // public fun get_profile_id(
-    //     registry: &ProfileRegistry,
-    //     user: address
-    // ): ID {
-    //     *table::borrow(&registry.address_to_profile, user)
-    // }
+    public fun get_profile_id(
+        registry: &ProfileRegistry,
+        user: address
+    ): ID {
+        *table::borrow(&registry.address_to_profile, user)
+    }
 
    public fun get_profile_id_by_owner(
         registry: &ProfileRegistry,
@@ -75,5 +75,20 @@ module suibiz::user {
         };
         option::some(*borrow(&registry.address_to_profile, owner))
     }
+
+           public entry fun get_profile_id_entry(
+        registry: &ProfileRegistry,
+        owner: address,
+        ctx: &mut TxContext
+    ) {
+        let mut opt_id = get_profile_id_by_owner(registry, owner);
+        if (option::is_some(&opt_id)) {
+            let id = option::extract<ID>(&mut opt_id);
+            event::emit(ProfileIdEvent { id });
+        };
+    }
+
+
+
 
 }
