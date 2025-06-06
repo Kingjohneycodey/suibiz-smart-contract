@@ -1,216 +1,377 @@
-module suibiz::marketplace {
-    use sui::tx_context::TxContext;
-    use sui::event;
-    use sui::coin::{Self, Coin};
-    use sui::balance::{Self, Balance};
-    use sui::sui::SUI;
-    use std::string::String;
-    use sui::object::UID;
-    use sui::transfer;
+module suibiz::marketplace;
 
-    public struct Product has key, store {
+use sui::coin::{Coin, split, value};
+use sui::sui::SUI;
+use sui::event;
+use std::string;
+use std::string::String;
+use sui::kiosk::{Self as kiosk, Kiosk, KioskOwnerCap};
+use sui::tx_context::{sender};
+use sui::vec_map::{Self, VecMap};
+
+
+    public struct Store has key, store {
         id: UID,
-        product_id: String,
-        owner: address,
-        price: u64,
-        is_listed: bool,
-        collection: String,
+        kiosk_id: ID,
         name: String,
-        description: String,
-        quantity: u64,
-        image_url: String
+        owner: address,
+        metadata_uri: String
     }
 
-    public struct PurchasedProduct has key, store {
+    // Registry that tracks all stores
+    public struct StoreRegistry has key {
         id: UID,
-        original_product_id: String,
-        owner: address,
-        purchased_quantity: u64,
-        unit_price: u64,
-        collection: String,
-        name: String,
-        description: String,
-        image_url: String
+        stores: VecMap<ID, ID> // Map of kiosk_id to store_id
     }
 
-    public struct Marketplace has key {
+    // Initialize the registry (call once)
+    public entry fun init_registry(ctx: &mut TxContext) {
+        transfer::share_object(StoreRegistry {
+            id: object::new(ctx),
+            stores: vec_map::empty()
+        });
+    }
+
+    // Create a new store with a kiosk
+    public entry fun create_store(
+        registry: &mut StoreRegistry,
+        name: String,
+        metadata_uri: String,
+        ctx: &mut TxContext
+    ) {
+        // Create kiosk
+        let (kiosk, cap) = kiosk::new(ctx);
+        let kiosk_id = object::id(&kiosk);
+
+        let store_owner = sender(ctx);
+
+        
+        // Create store object
+        let store = Store {
+            id: object::new(ctx),
+            kiosk_id: kiosk_id,
+            name,
+            owner: store_owner,
+            metadata_uri
+            
+        };
+        let store_id = object::id(&store);
+        
+        // Add to kiosk and store registry
+        vec_map::insert(
+            &mut registry.stores, 
+            kiosk_id, 
+            store_id
+        );
+        
+        // Share kiosk and transfer assets
+        transfer::public_share_object(kiosk);
+        transfer::public_transfer(cap, sender(ctx));
+        transfer::public_transfer(store, sender(ctx));
+    }
+
+    // Get store by kiosk ID (view function)
+    public fun get_store(registry: &StoreRegistry, kiosk_id: ID): Option<ID> {
+        if (vec_map::contains(&registry.stores, &kiosk_id)) {
+            option::some(*vec_map::get(&registry.stores, &kiosk_id))
+        } else {
+            option::none()
+        }
+    }
+
+    public struct ProductCreatedEvent has copy, drop {
+        product_type_id: ID,
+        creator: address,
+        kiosk_id: ID
+    }
+
+
+ ///  Product
+
+
+ public struct ProductType has key, store {
         id: UID,
-        fee_percentage: u64,
-        fee_recipient: address,
-        products_count: u64
+        metadata_uri: String,  // Points to off-chain JSON
+        price: u64,            
+        total_units: u64,      
+        sold_units: u64,   
+        creator: address, 
+        kiosk_id: ID,      
+        available_items: vector<ID>
     }
 
-    public struct MARKETPLACE has drop {}
-
-
-    public struct ProductListed has copy, drop {
-        product_id: String,
+ /// Represents each unique product unit (NFT)
+ public struct ProductItem has key, store {
+        id: UID,
+        product_type: ID,
         owner: address,
-        price: u64,
-        collection: String,
-        quantity: u64,
-        name: String,
-        description: String,
-        image_url: String
+        status: u8,
     }
 
-    public struct ProductPurchased has copy, drop {
-        product_id: String,
-        buyer: address,
+
+   public struct Order has key, store {
+    id: UID,
+    product_type: ID,
+    items: vector<ID>,
+    owner: address,
+    seller: address,
+    status: String,
+    escrow_id: ID
+}
+
+public struct Escrow has key, store {
+    id: UID,
+    amount: u64,
+    payment: Coin<SUI>,
+    seller: address,
+    buyer: address,
+    released: bool
+}
+
+    public struct OrderCreatedEvent has copy, drop {
+        order_id: ID,
+        creator: address,
         seller: address,
-        quantity: u64,
-        unit_price: u64,
-        total_price: u64
     }
 
-    const MAX_FEE_PERCENTAGE: u64 = 10;
 
-    public entry fun create_and_init_marketplace(
+const EORDER_NOT_PAID: u64 = 10;
+// const EORDER_ALREADY_COMPLETED: u64 = 11;
+const EINVALID_OWNER: u64 = 12;
+const EESCROW_ALREADY_RELEASED: u64 = 13;
+const EESCROW_AMOUNT_MISMATCH: u64 = 5;
+// const EESCROW_PAYMENT_MISMATCH: u64 = 6;
+
+
+/// Create product type & mint initial items
+    public entry fun create_product_type(
+        metadata_uri: String,
+        price: u64,
+        initial_quantity: u64,
+        kiosk: &mut Kiosk,
+        kiosk_cap: &KioskOwnerCap,
+        ctx: &mut TxContext
+    ) {
+        let sender_addr = sender(ctx);
+
+        // Create the product type
+        let mut product_type = ProductType {
+            id: object::new(ctx),
+            metadata_uri,
+            price,
+            total_units: initial_quantity,
+            sold_units: 0,
+            creator: sender_addr,
+            kiosk_id: object::id(kiosk),
+            available_items: vector::empty()
+        };
+
+        
+
+        // Mint items and place into kiosk
+        let mut i = 0;
+        while (i < initial_quantity) {
+            let item = ProductItem {
+                id: object::new(ctx),
+                product_type: object::id(&product_type),
+                owner: sender_addr,
+                status: 0
+            };
+            let item_id = object::id(&item);
+        
+        vector::push_back(&mut product_type.available_items, item_id);
+
+            kiosk::place(kiosk, kiosk_cap, item);
+            i = i + 1;
+        };
+
+
+
+            event::emit(ProductCreatedEvent {
+                product_type_id: object::id(&product_type),
+                creator: sender(ctx),
+                kiosk_id: object::id(kiosk)
+            });
+
+                    transfer::share_object(product_type);
+
+    }
+
+
+const EINSUFFICIENT_PAYMENT: u64 = 0;
+const EINSUFFICIENT_STOCK: u64 = 1;
+
+public entry fun purchase_multiple_items(
+    product_type: &mut ProductType,
+    kiosk: &mut Kiosk,
+    kiosk_cap: &KioskOwnerCap,
+    quantity: u64,
+    payment: &mut Coin<SUI>,
     ctx: &mut TxContext
 ) {
-    let fee_percentage = 2;
-    let fee_recipient = tx_context::sender(ctx);
-    
-    assert!(fee_percentage <= MAX_FEE_PERCENTAGE, 0);
-    
-    let marketplace = Marketplace {
-        id: object::new(ctx),
-        fee_percentage,
-        fee_recipient,
-        products_count: 0
+    let buyer = sender(ctx);
+    let total_price = product_type.price * quantity;
+
+    // Check payment
+    assert!(value(payment) >= total_price, EINSUFFICIENT_PAYMENT);
+
+    // Check stock
+    assert!(
+        product_type.total_units - product_type.sold_units >= quantity,
+        EINSUFFICIENT_STOCK
+    );
+
+    let mut i = 0;
+    while (i < quantity) {
+
+
+         let item_id = vector::pop_back(&mut product_type.available_items);
+
+
+        let item: ProductItem = kiosk::take(kiosk, kiosk_cap, item_id);
+        transfer::public_transfer(item, buyer);
+        i = i + 1;
     };
 
-    transfer::share_object(marketplace);
+    product_type.sold_units = product_type.sold_units + quantity;
+
+    let seller_share = split(payment, total_price, ctx);
+    transfer::public_transfer(seller_share, product_type.creator);
 }
 
 
-    public entry fun list_product( 
-        marketplace: &mut Marketplace,
-        product_id: String,
-        price: u64,
-        collection: String,
-        name: String,
-        description: String,
-        image_url: String,
-        quantity: u64,
-        ctx: &mut TxContext
-    ) {
-        assert!(price > 0, 1);
-        assert!(quantity > 0, 2);
+public entry fun create_order(
+    product_type: &mut ProductType,
+    quantity: u64,
+    payment: &mut Coin<SUI>,
+    ctx: &mut TxContext
+) {
+    let buyer = sender(ctx);
+    let total_price = product_type.price * quantity;
 
-        let product = Product {
-            id: object::new(ctx),
-            product_id: copy product_id,
-            owner: tx_context::sender(ctx),
-            price,
-            name: copy name,
-            description: copy description,
-            image_url: copy image_url,
-            quantity,
-            is_listed: true,
-            collection: copy collection
-        };
+    // Validate payment and stock
+    assert!(value(payment) >= total_price, EINSUFFICIENT_PAYMENT);
+    assert!(product_type.total_units - product_type.sold_units >= quantity, EINSUFFICIENT_STOCK);
 
-        marketplace.products_count = marketplace.products_count + 1;
-        transfer::transfer(product, tx_context::sender(ctx));
+    // Create escrow
+    let payment_coin = split(payment, total_price, ctx);
+    let escrow = Escrow {
+        id: object::new(ctx),
+        amount: total_price,
+        payment: payment_coin,
+        seller: product_type.creator,
+        buyer,
+        released: false
+    };
 
-        event::emit(ProductListed {
-            product_id,
-            owner: tx_context::sender(ctx),
-            price,
-            collection,
-            quantity,
-            name,
-            description,
-            image_url
-        });
-    }
+    // Reserve items
+    let mut items = vector::empty();
+    let mut i = 0;
+    while (i < quantity) {
+        let item_id = vector::pop_back(&mut product_type.available_items);
+        vector::push_back(&mut items, item_id);
+        i = i + 1;
+    };
 
-    public entry fun purchase_product(
-        marketplace: &mut Marketplace,
-        product: &mut Product,
-        quantity_to_purchase: u64,
-        payment: Coin<SUI>,
-        ctx: &mut TxContext
-    ) {
-        assert!(product.is_listed, 3);
-        assert!(quantity_to_purchase > 0, 4);
-        assert!(product.quantity >= quantity_to_purchase, 5);
-        
-        let total_price = product.price * quantity_to_purchase;
-        assert!(coin::value(&payment) >= total_price, 6);
+    // Create order 
+    let product_type_id = object::id(product_type);
+    let order = Order {
+        id: object::new(ctx),
+        product_type: product_type_id,
+        items,
+        owner: buyer,
+        seller: product_type.creator,
+        status: string::utf8(b"paid"),
+        escrow_id: object::id(&escrow)
+    };
 
-        let buyer = tx_context::sender(ctx);
-        let seller = product.owner;
-        let fee_amount = total_price * marketplace.fee_percentage / 100;
-        let seller_amount = total_price - fee_amount;
+    // Update inventory
+    product_type.sold_units = product_type.sold_units + quantity;
 
-        // Split payment into seller and fee portions
-        let mut payment_balance = coin::into_balance(payment);
-        let fee_balance = balance::split(&mut payment_balance, fee_amount);
-        let seller_coin = coin::from_balance(payment_balance, ctx);
-        let fee_coin = coin::from_balance(fee_balance, ctx);
-        
-        transfer::public_transfer(seller_coin, seller);
-        transfer::public_transfer(fee_coin, marketplace.fee_recipient);
+     event::emit(OrderCreatedEvent {
+        order_id: object::id(&order),
+        creator: buyer,
+        seller: product_type.creator
+    });
 
-        product.quantity = product.quantity - quantity_to_purchase;
-        
-        let purchased_product = PurchasedProduct {
-            id: object::new(ctx),
-            original_product_id: product.product_id,
-            owner: buyer,
-            purchased_quantity: quantity_to_purchase,
-            unit_price: product.price,
-            collection: product.collection,
-            name: product.name,
-            description: product.description,
-            image_url: product.image_url
-        };
+     transfer::share_object(escrow);
+      transfer::share_object(order);
 
-        transfer::transfer(purchased_product, buyer);
-
-        event::emit(ProductPurchased {
-            product_id: product.product_id,
-            buyer,
-            seller,
-            quantity: quantity_to_purchase,
-            unit_price: product.price,
-            total_price
-        });
-
-        if (product.quantity == 0) {
-            product.is_listed = false;
-        }
-    }
-
-
-    public entry fun update_price(
-        product: &mut Product,
-        new_price: u64,
-        _ctx: &mut TxContext
-    ) {
-        assert!(product.is_listed, 7);
-        assert!(new_price > 0, 8);
-        product.price = new_price;
-    }
-
-    public entry fun delist_product(
-        product: &mut Product,
-        _ctx: &mut TxContext
-    ) {
-        product.is_listed = false;
-    }
-
-    public entry fun add_quantity(
-        product: &mut Product,
-        additional_quantity: u64,
-        _ctx: &mut TxContext
-    ) {
-        assert!(additional_quantity > 0, 9);
-        product.quantity = product.quantity + additional_quantity;
-        if (!product.is_listed) {
-            product.is_listed = true;
-        }
-    }
+   
 }
+
+public entry fun mark_received(
+    order: &mut Order,
+    ctx: &mut TxContext
+) {
+    assert!(sender(ctx) == order.owner, EINVALID_OWNER);
+    assert!(string::utf8(b"paid") == order.status, EORDER_NOT_PAID);
+    
+    order.status = string::utf8(b"received");
+}
+
+public entry fun release_items_and_funds(
+    order: &mut Order,
+    escrow: &mut Escrow,
+    kiosk: &mut Kiosk,
+    kiosk_cap: &KioskOwnerCap,
+    ctx: &mut TxContext
+) {
+   // Validate
+    
+    let buyer = order.owner;
+    let seller = order.seller;
+    assert!(sender(ctx) == seller, EINVALID_OWNER);
+    assert!(string::utf8(b"received") == order.status, EORDER_NOT_PAID);
+    assert!(!escrow.released, EESCROW_ALREADY_RELEASED);
+    assert!(order.escrow_id == object::id(escrow), 0);
+
+    // Transfer items
+
+    let mut items_copy = vector::empty();
+    let mut i = 0;
+    while (i < vector::length(&order.items)) {
+        let item_id = *vector::borrow(&order.items, i);
+        vector::push_back(&mut items_copy, item_id);
+        i = i + 1;
+    };
+
+    // Process items
+    while (!vector::is_empty(&items_copy)) {
+        let item_id = vector::pop_back(&mut items_copy);
+        let item: ProductItem = kiosk::take(kiosk, kiosk_cap, item_id);
+        transfer::public_transfer(item, buyer);
+    };
+
+    // Handle payment
+    let payment = &mut escrow.payment;
+    let payment_value = value(payment);
+    assert!(payment_value == escrow.amount, EESCROW_AMOUNT_MISMATCH);
+    
+    // Split payment to transfer exact amount
+    let payment_to_transfer = split(payment, escrow.amount, ctx);
+    transfer::public_transfer(payment_to_transfer, seller);
+
+    // Update metadata
+    // let timestamp = tx_context::epoch(ctx);
+    // escrow.released_at = timestamp;
+    // order.is_completed = true;
+    // order.completed_at = timestamp;
+
+    escrow.released = true;
+
+    order.status = string::utf8(b"completed");
+
+
+    // event::emit(OrderCompletedEvent {
+    //     order_id: object::id(order),
+    //     escrow_id: object::id(escrow),
+    //     seller,
+    //     buyer,
+    //     amount: escrow.amount,
+    //     timestamp
+    // });
+
+}
+
+

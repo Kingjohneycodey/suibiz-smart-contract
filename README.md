@@ -19,7 +19,9 @@ marketplace
 0x2cb40341df91ad80a4f5b5ade5936f87d7a22e8f4e1db7808b8e22589577912b
 
 
-registry0xeb0e56de50680e693e7fb4acb59647cb43ef6ab3bfff239283c7ddfefe77a23c
+registry
+
+0xeb0e56de50680e693e7fb4acb59647cb43ef6ab3bfff239283c7ddfefe77a23c
 
 
 
@@ -43,7 +45,7 @@ sui client call \
     "collectibles" \
     "yam" \
     "ghhh" \
-    "https://randomuser.me/api/portraits/men/73.jpg" \
+    "https://picsum.photos/seed/101/500/500" \
     34 \
   --gas-budget 10000000
 

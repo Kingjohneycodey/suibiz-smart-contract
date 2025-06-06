@@ -1,32 +1,32 @@
-module suibiz::user {
-    use sui::object::{Self, UID, ID};
-    use sui::tx_context::{Self, TxContext};
-   use sui::table::{Self, Table, new, add, contains, borrow};
-    use sui::transfer;
+module suibiz::user;
+    use std::string::String;
+    use sui::table::{Self, Table};
     use sui::event;
-    use std::option::{Self, Option};
 
 
     public struct UserProfile has key, store {
         id: UID,
-        name: vector<u8>,
-        username: vector<u8>,
-        bio: vector<u8>,
-        avatar_url: vector<u8>,
-        business_address: vector<u8>,
+        metadata_uri: String,
+        role: String,
         owner: address,
     }
 
     public struct ProfileIdEvent has copy, drop, store {
         id: ID,
+        role: String,
     }
+
+    public struct ProfileInfo has copy, drop, store {
+    id: ID,
+    role: String,
+}
 
     public struct ProfileRegistry has key {
         id: UID,
-        address_to_profile: Table<address, ID>,
+        address_to_profile: Table<address, ProfileInfo>,
     }
 
-    public fun init_registry(ctx: &mut TxContext) {
+    public entry fun init_registry(ctx: &mut TxContext) {
         let registry = ProfileRegistry {
             id: object::new(ctx),
             address_to_profile: table::new(ctx),
@@ -36,59 +36,21 @@ module suibiz::user {
 
     public entry fun create_profile(
         registry: &mut ProfileRegistry,
-        name: vector<u8>,
-        username: vector<u8>,
-        bio: vector<u8>,
-        avatar_url: vector<u8>,
-        business_address: vector<u8>,
+        metadata_uri: String,
+        role: String,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
         let profile = UserProfile {
             id: object::new(ctx),
-            name,
-            username,
-            bio,
-            avatar_url,
-            business_address,
+            metadata_uri,
+            role,
             owner: sender,
         };
+
         let profile_id = object::id(&profile);
-        table::add(&mut registry.address_to_profile, sender, profile_id);
+        let info = ProfileInfo { id: profile_id, role };
+     table::add(&mut registry.address_to_profile, sender, info);
         transfer::transfer(profile, sender);
-        event::emit(ProfileIdEvent { id: profile_id });
+        event::emit(ProfileIdEvent { id: profile_id, role });
     }
-
-    public fun get_profile_id(
-        registry: &ProfileRegistry,
-        user: address
-    ): ID {
-        *table::borrow(&registry.address_to_profile, user)
-    }
-
-   public fun get_profile_id_by_owner(
-        registry: &ProfileRegistry,
-        owner: address
-    ): Option<ID> {
-        if (!contains(&registry.address_to_profile, owner)) {
-            return option::none<ID>();
-        };
-        option::some(*borrow(&registry.address_to_profile, owner))
-    }
-
-           public entry fun get_profile_id_entry(
-        registry: &ProfileRegistry,
-        owner: address,
-        ctx: &mut TxContext
-    ) {
-        let mut opt_id = get_profile_id_by_owner(registry, owner);
-        if (option::is_some(&opt_id)) {
-            let id = option::extract<ID>(&mut opt_id);
-            event::emit(ProfileIdEvent { id });
-        };
-    }
-
-
-
-
-}
