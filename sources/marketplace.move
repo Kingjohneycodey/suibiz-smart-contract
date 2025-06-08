@@ -1,3 +1,4 @@
+#[allow(lint(coin_field))]
 module suibiz::marketplace;
 
 use sui::coin::{Coin, split, value};
