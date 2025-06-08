@@ -6,7 +6,7 @@ use sui::event;
 use sui::tx_context::{sender};
 use sui::table::{Self, Table};
 
-// metadata_uri has (name, description, image, status)
+// metadata_uri is the walrus blob id that contains data like (name, description, image, status)
 
 public struct Service has key, store {
     id: UID,
