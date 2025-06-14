@@ -14,17 +14,30 @@ public struct Service has key, store {
     metadata_uri: String
 }
 
-
- public struct ServiceCreated has copy, drop, store {
+public struct ServiceCreated has copy, drop, store {
     service_id: ID,
     creator: address,
 }
-
 
 public struct ServiceRegistry has key {
     id: UID,
     address_to_service: Table<address, ID>,
 }
+
+
+public struct Job has key {
+    id: UID,
+    client: address,
+    freelancer: option::Option<address>,
+    price: u64,
+    status: u8, // 0 = Created, 1 = Accepted, 2 = Completed, 3 = Disputed
+    metadata_uri: vector<u8>, // off-chain job metadata (Walrus)
+    rating: option::Option<u8>,
+  }
+
+
+
+// Functions
 
 public entry fun init_registry(ctx: &mut TxContext) {
     let registry = ServiceRegistry {
@@ -74,4 +87,6 @@ public entry fun update_service(
 
     service.metadata_uri = new_metadata_uri;
 }
+
+
 
